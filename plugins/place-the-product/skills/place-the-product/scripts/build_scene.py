@@ -79,7 +79,7 @@ def render_settings(sc, W, H, job, scene_mode):
     dev = setup_device(sc, r.get("device", "auto"))
     sc.render.resolution_x, sc.render.resolution_y = int(W), int(H)
     sc.render.resolution_percentage = 100
-    sc.cycles.samples = int(r.get("samples", 256))
+    sc.cycles.samples = int(r.get("samples", 300))
     sc.cycles.use_denoising = True
     sc.cycles.max_bounces = int(r.get("max_bounces", 8))
     sc.render.film_transparent = True
@@ -694,6 +694,7 @@ def main():
             if ROLE not in o:
                 tag(o, "scene")
         render_settings(sc, W, H, job, True)
+        report["plate_size"] = [int(W), int(H)]
         coll = get_coll("PTP_PRODUCT")
         objs, us = append_product(job["product"], coll)
         root, mins, maxs = product_root(objs, coll, us)
@@ -711,6 +712,7 @@ def main():
         sc.name = "PTP"
         W, H = scene["image_size"]
         render_settings(sc, W, H, job, False)
+        report["plate_size"] = [int(W), int(H)]
         img = plate_image(job.get("image") or scene["image"])
         cam = setup_camera_obj(sc, scene, img)
         coll = get_coll("PTP_PRODUCT")

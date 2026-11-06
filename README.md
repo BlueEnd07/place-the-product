@@ -17,7 +17,9 @@ Claude matches the camera, places the product at real size, and matches the ligh
 | `<name>_4_composite.png/.jpg` | The final image |
 | `<name>_shadow_multiply.png` | Bonus: the shadow as a Photoshop "Multiply" layer |
 
-All images match the room image's pixel size, so they stack directly in Photoshop.
+All images share one pixel size (the final resolution you pick, 4K by default, with the room image's aspect ratio), so they stack directly in Photoshop.
+
+**Render flow:** Claude first renders a quick **720p check** (a few seconds) and asks you to confirm the placement. After you approve, it asks for the final size (4K by default) and renders it on the GPU: 300 samples, denoised, held to about 1–2 minutes.
 
 ## How it works
 1. **Camera match.** [MoGe-3](https://github.com/microsoft/MoGe) estimates the lens and a real-scale 3D surface of

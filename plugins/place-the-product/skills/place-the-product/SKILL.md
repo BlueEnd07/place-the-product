@@ -20,7 +20,8 @@ Do not guess what an image shows; open it with the Read tool.
 | `<name>_4_composite.png` / `.jpg` | Final image: product and shadow in the scene |
 | `<name>_shadow_multiply.png` | Bonus: the shadow as a Photoshop "Multiply" layer (white = unchanged) |
 
-All four images match the scene image's pixel size, so they stack in Photoshop with no alignment needed.
+All four images share one pixel size (the final resolution chosen, e.g. 4K, with the scene image's aspect ratio), so
+they stack in Photoshop with no alignment needed.
 
 ## Setup (once per machine)
 
@@ -118,7 +119,7 @@ Look at `work/light_hints.jpg` **and** the original image, then decide (details 
 The room itself is rebuilt from the image and lights the product automatically (bounce, reflections, colour). Add
 explicit lights only for what the reconstruction can't carry: directional sun or keys, and clipped light sources.
 
-### 5. Build and preview
+### 5. Build and the 720p check render
 Write `job.json` (full schema: [references/job_schema.md](references/job_schema.md)), e.g.:
 ```json
 {
@@ -131,13 +132,15 @@ Write `job.json` (full schema: [references/job_schema.md](references/job_schema.
   "lights": [{"type": "sun", "to_light": [-0.8, -0.1, 0.6], "strength": 3, "angle_deg": 1.5, "kelvin": 5200}],
   "calibrate": {"target_albedo": 0.4},
   "finish": {"blur_px": 0.0, "grain": "auto"},
-  "render": {"samples": 384, "preview_samples": 48}
+  "render": {"samples": 300, "preview_samples": 64, "final_resolution": "4k", "time_budget_s": 120}
 }
 ```
 ```
 "BLENDER" -b --factory-startup --python-exit-code 1 -P scripts/build_scene.py -- --job job.json
 "BLENDER" -b --factory-startup --python-exit-code 1 -P scripts/render_outputs.py -- --blend out/<name>.blend --preview
 ```
+`--preview` always renders at **720p** (long side 1280 px, aspect kept) with 64 samples in about 5–15 s on a GPU.
+Never start with a full-size render.
 Read the build report: `surface.kind` (horizontal/wall), `box_fit.*_ratio_box_over_product` (≈1 means the scale
 agrees with the box; 1.3 or 0.7 means the scene scale or the box is wrong, so recheck step 3), and `calibration`
 (`implied_surface_albedo`, `light_scale`, plus any note).
@@ -154,13 +157,28 @@ product + shadow. Check, in this order (fix recipes in [references/troubleshooti
 6. **Occlusion**: if something in the image sits in front of the product, supply `finish.occlusion_mask`
    (white = in front).
 
-Change the job, rebuild, and preview again. Usually 2–4 rounds. Tell the user what you changed and why, in one line each.
+Fix what you can see yourself first: change the job, rebuild, and render the 720p preview again. Tell the user what
+you changed and why, in one line each.
 
-### 7. Final
+**Placement gate (mandatory).** When the 720p preview looks right to you, show it to the user (the composite
+`out/<name>_preview_4_composite.jpg` and the QC sheet) and ask them to confirm the placement: position, size,
+orientation, light and shadow direction. **Stop and wait for their answer.** If they ask for changes, apply them and
+show a new 720p preview. Don't move on until they explicitly approve.
+
+### 7. Final render: ask for the size first
+Once the placement is approved, ask: "Placement approved. Render the final in 4K (3840 px wide), or another size
+(1080p / 1440p / the image's native size)?" Mention it takes about 1–2 minutes. If the scene image is smaller than
+the size they choose, tell them the background will be upscaled: the product and shadow render sharp, but the room
+can't gain detail. Render only after they answer:
 ```
-"BLENDER" -b --factory-startup --python-exit-code 1 -P scripts/render_outputs.py -- --blend out/<name>.blend
+"BLENDER" -b --factory-startup --python-exit-code 1 -P scripts/render_outputs.py -- --blend out/<name>.blend --res 4k
 ```
-Then look at the final QC sheet once more and hand over the list of files, with absolute paths. Mention anything the
+`--res`: `720p | 1080p | 1440p | 4k | 8k | native | <long side px>`. Final defaults: 300 samples, GPU (OptiX/CUDA/
+HIP/Metal, chosen automatically), adaptive sampling and OpenImageDenoise on, and a **120 s time budget for the whole
+render**. The budget is split over the passes with Cycles' per-pass time limit, so it finishes in 1–2 minutes even at 4K.
+If the report says `warning_cpu` (no GPU), tell the user: the time limit then costs quality, so offer a longer
+`--time-budget` or a smaller size.
+Then look at the final QC sheet once more and hand over the list of files, with absolute paths and the resolution. Mention anything the
 user should know: assumed scale, a mask you'd recommend, a shadow you couldn't fully match.
 
 ## Scene mode (architect's .blend)
@@ -171,7 +189,7 @@ render used another engine or post-processing, render the plate yourself (leave 
 
 ## Rules
 - Never overwrite inputs. Everything goes to the job folder.
-- Preview before final, and never skip looking at the QC sheet.
+- Always 720p first, the user confirms placement, then ask for the final size (default 4K). Never skip the QC sheet.
 - The product's real size is truth: the user's dimensions if given, otherwise the file. Fix scene-scale problems in the
   scene (`--ref`), never by rescaling the product to make the box fit.
 - Report numbers that matter (camera height, FOV, scale ratio, light scale) in plain words, not raw JSON.

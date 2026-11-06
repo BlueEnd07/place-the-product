@@ -6,7 +6,11 @@
 Image mode:  (optional) light calibration -> product pass + shadow pass (EXR) -> composite.py -> 4 outputs.
 Scene mode:  plate (if none given) + full render + product pass + shadow pass, all with the scene's own colour management.
 
---preview: half resolution, preview samples, files suffixed _preview. Use it for every iteration; final once approved.
+--preview: 720p check render (long side 1280 px), preview samples, files suffixed _preview. Show it to the user
+           and get the placement approved before any final render.
+--res:     output size: 720p | 1080p | 1440p | 4k | 8k | native | <long side in px>   (final default: job render.final_resolution, 4k)
+Time: each run is held to a time budget (final default 120 s total, preview 30 s) by splitting it over the passes
+and using Cycles' per-pass time limit + adaptive sampling + denoising on the GPU.
 The calibrated light values are saved back into the .blend (so the delivered .blend matches the delivered images).
 """
 import argparse
@@ -14,6 +18,7 @@ import json
 import math
 import os
 import sys
+import time
 
 import bpy
 import numpy as np
@@ -34,10 +39,26 @@ def args():
     ap.add_argument("--blend", required=True)
     ap.add_argument("--preview", action="store_true")
     ap.add_argument("--samples", type=int)
-    ap.add_argument("--scale", type=float)
+    ap.add_argument("--scale", type=float, help="(legacy) resolution multiplier; prefer --res")
+    ap.add_argument("--res", help="720p | 1080p | 1440p | 4k | 8k | native | long side in px")
+    ap.add_argument("--time-budget", type=float, help="seconds for the whole run (all passes)")
     ap.add_argument("--no-calibrate", action="store_true")
     ap.add_argument("--no-save", action="store_true")
     return ap.parse_args(argv)
+
+
+PRESETS = {"720p": 1280, "1080p": 1920, "1440p": 2560, "2k": 2048, "4k": 3840, "uhd": 3840, "8k": 7680}
+
+
+def resolution_for(name, base):
+    """Output size keeping the image aspect. Presets give the long side (16:9 4k = 3840x2160)."""
+    W, H = base
+    n = str(name).lower().strip()
+    if n == "native":
+        return W, H
+    long_side = PRESETS.get(n) or int(float(n))
+    s = long_side / max(W, H)
+    return max(2, int(round(W * s / 2) * 2)), max(2, int(round(H * s / 2) * 2))
 
 
 def role(o):
@@ -110,7 +131,8 @@ def calibrate(sc, meta, tmp_dir, plate_lin):
     box = rep.get("proxies", {}).get("support_box_px")
     if catcher is None or box is None:
         return {"skipped": "no catcher/support region"}
-    W, H = sc.render.resolution_x, sc.render.resolution_y
+    H, W = plate_lin.shape[:2]  # support box is in scene-image pixels
+    rW = sc.render.resolution_x
     sv = Saved()
     r = sc.render
     sv.set(r, "use_border", True)
@@ -121,9 +143,11 @@ def calibrate(sc, meta, tmp_dir, plate_lin):
     sv.set(r, "border_max_x", min(1.0, x1 / W + pad))
     sv.set(r, "border_min_y", max(0.0, 1 - y1 / H - pad))
     sv.set(r, "border_max_y", min(1.0, 1 - y0 / H + pad))
-    pct = max(10, min(100, int(round(100 * 400 / max(1.0, max(x1 - x0, y1 - y0))))))
+    crop_px = max(1.0, max(x1 - x0, y1 - y0)) * rW / W
+    pct = max(5, min(100, int(round(100 * 400 / crop_px))))
     sv.set(r, "resolution_percentage", pct)
     sv.set(sc.cycles, "samples", 64)
+    sv.set(sc.cycles, "time_limit", 6.0)
     for o in objs("product") + objs("product_root"):
         sv.set(o, "hide_render", True)
     sv.set(catcher, "is_shadow_catcher", False)
@@ -237,12 +261,38 @@ def main():
     dev = setup_device(sc, rcfg.get("device", "auto"))
     log("device", dev)
 
-    scale = a.scale or (0.5 if a.preview else 1.0)
-    sc.render.resolution_percentage = int(round(100 * scale))
-    sc.cycles.samples = a.samples or (int(rcfg.get("preview_samples", 64)) if a.preview else int(rcfg.get("samples", 256)))
+    base_res = (sc.render.resolution_x, sc.render.resolution_y)
+    res_name = a.res or ("720p" if a.preview else str(rcfg.get("final_resolution", "4k")))
+    if a.scale:
+        out_w, out_h = round(base_res[0] * a.scale), round(base_res[1] * a.scale)
+    else:
+        out_w, out_h = resolution_for(res_name, base_res)
+    sc.render.resolution_x, sc.render.resolution_y = out_w, out_h
+    sc.render.resolution_percentage = 100
+    sc.cycles.samples = a.samples or (int(rcfg.get("preview_samples", 64)) if a.preview else int(rcfg.get("samples", 300)))
+    sc.cycles.use_denoising = True
+    try:
+        sc.cycles.denoiser = "OPENIMAGEDENOISE"
+    except TypeError:
+        pass
+    if hasattr(sc.cycles, "denoising_use_gpu"):
+        sc.cycles.denoising_use_gpu = dev != "CPU"
+    sc.cycles.use_adaptive_sampling = True
+    sc.cycles.adaptive_threshold = float(rcfg.get("preview_noise_threshold", 0.03) if a.preview else rcfg.get("noise_threshold", 0.01))
+    budget = a.time_budget or float(rcfg.get("preview_time_budget_s", 30) if a.preview else rcfg.get("time_budget_s", 120))
+    n_passes = 3 if not scene_mode else (3 if job.get("image") else 4)
+    probe_share = 0.1 if (not scene_mode and not a.no_calibrate and job.get("calibrate", {}) is not False) else 0.0
+    per_pass = max(5.0, budget * (1 - probe_share) / n_passes)
+    sc.cycles.time_limit = per_pass
+    log(f"resolution {out_w}x{out_h} ({res_name}), samples {sc.cycles.samples}, device {dev}, "
+        f"time budget {budget:.0f}s -> {per_pass:.0f}s per pass")
     sc.render.film_transparent = True
+    t_start = time.time()
     sv = Saved()
-    result = {"name": name, "preview": a.preview}
+    result = {"name": name, "preview": a.preview, "resolution": [out_w, out_h], "resolution_preset": res_name,
+              "samples": sc.cycles.samples, "device": dev, "time_budget_s": budget}
+    if dev == "CPU":
+        result["warning_cpu"] = "No GPU found - rendering on CPU; the time limit will cut samples, so expect more noise."
 
     if not scene_mode:
         plate_path = job.get("image") or meta["report"].get("image")
@@ -315,6 +365,13 @@ def main():
             result["outputs"]["qc_sheet"] = composite.qc_sheet(os.path.join(out_dir, f"{name}{suffix}_qc_sheet.jpg"), full,
                                                                [p_png, s_png, o3], [xs.min(), ys.min(), xs.max(), ys.max()])
 
+    result["render_seconds"] = round(time.time() - t_start, 1)
+    plate_w = meta["report"].get("plate_size", base_res)[0] if isinstance(meta["report"].get("plate_size"), list) else base_res[0]
+    if out_w > plate_w * 1.05 and not scene_mode:
+        result["note_upscaled_plate"] = (f"output {out_w}px wide but the scene image is {plate_w}px: the background is upscaled "
+                                         "(product and shadow are rendered sharp at full size).")
+    if a.preview:
+        sc.render.resolution_x, sc.render.resolution_y = base_res  # previews don't change the saved .blend size
     if not a.no_save and not a.preview:
         bpy.ops.wm.save_mainfile()
         result["blend"] = bpy.data.filepath

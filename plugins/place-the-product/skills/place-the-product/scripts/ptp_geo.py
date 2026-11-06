@@ -102,9 +102,27 @@ def resize_nearest(a, H, W):
     return a[yi][:, xi]
 
 
-def resize_area(a, H, W):
-    """Box-filter downscale (or nearest upscale) without extra deps."""
+def resize_bilinear(a, H, W):
     h, w = a.shape[:2]
+    y = np.clip((np.arange(H) + 0.5) * h / H - 0.5, 0, h - 1)
+    x = np.clip((np.arange(W) + 0.5) * w / W - 0.5, 0, w - 1)
+    y0 = np.floor(y).astype(int); x0 = np.floor(x).astype(int)
+    y1 = np.minimum(y0 + 1, h - 1); x1 = np.minimum(x0 + 1, w - 1)
+    fy = (y - y0).astype(np.float32); fx = (x - x0).astype(np.float32)
+    if a.ndim == 3:
+        fy = fy[:, None, None]; fx = fx[None, :, None]
+    else:
+        fy = fy[:, None]; fx = fx[None, :]
+    top = a[y0][:, x0] * (1 - fx) + a[y0][:, x1] * fx
+    bot = a[y1][:, x0] * (1 - fx) + a[y1][:, x1] * fx
+    return (top * (1 - fy) + bot * fy).astype(np.float32)
+
+
+def resize_area(a, H, W):
+    """Box-filter downscale, bilinear upscale, without extra deps."""
+    h, w = a.shape[:2]
+    if H >= h and W >= w:
+        return resize_bilinear(a, H, W)
     if H >= h or W >= w:
         return resize_nearest(a, H, W)
     ys = (np.arange(H + 1) * h / H).astype(int)
