@@ -45,16 +45,34 @@ All images share one pixel size (the final resolution you pick, 4K by default, w
   - macOS: MoGe-3 isn't supported upstream. The setup installs MoGe-2 (best effort), and vanishing-line mode always works.
 
 ## Install
-**Option A: plugin (recommended).** In Claude Code:
+
+### Easiest: give the link to your AI agent
+Paste this into Claude Code (or any coding agent):
+
+> Install the skill from https://github.com/BlueEnd07/place-the-product. Follow its INSTALL.md.
+
+The agent follows [INSTALL.md](INSTALL.md): it checks prerequisites, installs the plugin non-interactively, asks
+before the ~3 GB MoGe download, runs the self-test, and tells you when it's ready.
+
+### One command
+**Windows (PowerShell):**
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/BlueEnd07/place-the-product/main/install.ps1 | iex"
 ```
-/plugin marketplace add "<path to this folder>"
+**macOS / Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/BlueEnd07/place-the-product/main/install.sh | bash
+```
+Add MoGe at the same time with `install.ps1 -MoGe` / `install.sh --moge` (from a clone). Re-running the command updates
+to the latest version.
+
+### Inside Claude Code
+```
+/plugin marketplace add BlueEnd07/place-the-product
 /plugin install place-the-product@place-the-product-marketplace
 ```
-Then set up MoGe once: `powershell -ExecutionPolicy Bypass -File plugins\place-the-product\skills\place-the-product\setup\setup_moge.ps1`
-(Mac/Linux: `bash plugins/place-the-product/skills/place-the-product/setup/setup_moge.sh`). Claude will also offer to
-run it the first time it's needed.
-
-**Option B: copy the skill.** Run `install-windows.ps1` (right-click > Run with PowerShell) or `bash install-mac.sh`.
+Then set up MoGe once: `setup/setup_moge.ps1` (Windows) or `setup/setup_moge.sh` (Mac/Linux) inside the skill folder.
+Claude also offers to run it the first time it's needed.
 
 **Check the install:** ask Claude to "run the place-the-product self-test", or run
 ```
