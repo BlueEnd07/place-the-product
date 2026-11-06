@@ -1,5 +1,5 @@
 ---
-name: place-product
+name: place-the-product
 description: Place a real product (.blend at real-world scale, with its materials) into a photo or architectural render of a room — wall, table, floor, shelf — matching the image's camera, perspective, scale, light, shadows and grain. Delivers a .blend plus four images - product only (transparent, no shadow), shadow only, product + shadow, and the full composite. Uses MoGe monocular geometry (or vanishing lines) to match the camera, or the architect's own Blender scene when available. Use when someone wants to put / place / composite / insert a product into an interior image, render, room photo or scene, or asks for a product-in-context / in-situ shot.
 ---
 

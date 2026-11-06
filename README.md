@@ -48,15 +48,15 @@ All images match the room image's pixel size, so they stack directly in Photosho
 /plugin marketplace add "<path to this folder>"
 /plugin install place-the-product@place-the-product-marketplace
 ```
-Then set up MoGe once: `powershell -ExecutionPolicy Bypass -File plugins\place-the-product\skills\place-product\setup\setup_moge.ps1`
-(Mac/Linux: `bash plugins/place-the-product/skills/place-product/setup/setup_moge.sh`). Claude will also offer to
+Then set up MoGe once: `powershell -ExecutionPolicy Bypass -File plugins\place-the-product\skills\place-the-product\setup\setup_moge.ps1`
+(Mac/Linux: `bash plugins/place-the-product/skills/place-the-product/setup/setup_moge.sh`). Claude will also offer to
 run it the first time it's needed.
 
 **Option B: copy the skill.** Run `install-windows.ps1` (right-click > Run with PowerShell) or `bash install-mac.sh`.
 
-**Check the install:** ask Claude to "run the place-product self-test", or run
+**Check the install:** ask Claude to "run the place-the-product self-test", or run
 ```
-blender -b --factory-startup -P plugins/place-the-product/skills/place-product/selftest/selftest.py -- --out %TEMP%\ptp_selftest
+blender -b --factory-startup -P plugins/place-the-product/skills/place-the-product/selftest/selftest.py -- --out %TEMP%\ptp_selftest
 ```
 It builds a synthetic room with a known camera, runs the whole pipeline and prints `SELFTEST PASSED`.
 
@@ -80,7 +80,7 @@ hands over the files.
 .claude-plugin/marketplace.json
 plugins/place-the-product/
   .claude-plugin/plugin.json
-  skills/place-product/
+  skills/place-the-product/
     SKILL.md                  workflow Claude follows
     references/               job schema, lighting guide, troubleshooting, vanishing-line mode
     scripts/                  moge_infer, solve_scene, locate, analyze_light, inspect_product,
