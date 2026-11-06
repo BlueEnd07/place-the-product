@@ -1,6 +1,7 @@
 """Render the deliverables from a .blend made by build_scene.py.
 
     blender -b --factory-startup --python-exit-code 1 -P render_outputs.py -- --blend out/x.blend [--preview]
+           [--product-samples 1024] [--supersample 2] [--shadow-samples 128]
            [--samples 512] [--no-calibrate] [--scale 0.5]
 
 Image mode:  (optional) light calibration -> product pass + shadow pass (EXR) -> composite.py -> 4 outputs.
@@ -44,6 +45,9 @@ def args():
     ap.add_argument("--time-budget", type=float, help="seconds for the whole run (all passes)")
     ap.add_argument("--no-calibrate", action="store_true")
     ap.add_argument("--no-save", action="store_true")
+    ap.add_argument("--product-samples", type=int, help="samples for the product-only crop pass")
+    ap.add_argument("--supersample", type=int, help="product crop supersampling factor (1-4)")
+    ap.add_argument("--shadow-samples", type=int, help="samples for the shadow / scene passes")
     return ap.parse_args(argv)
 
 
@@ -107,6 +111,90 @@ class Saved:
         for obj, attr, val in reversed(self.items):
             setattr(obj, attr, val)
         self.items = []
+
+
+# ------------------------------------------------------------------ high-quality product crop (like Ctrl+B)
+def product_box_px(sc, product, W, H, pad_frac=0.04, pad_px=8):
+    """Screen box of the product in output pixels (x0, y0, x1, y1; top-left origin), padded and clamped.
+    None if the product is behind the camera or off screen (then render the full frame)."""
+    from bpy_extras.object_utils import world_to_camera_view
+    from mathutils import Vector
+    cam = sc.camera
+    dg = bpy.context.evaluated_depsgraph_get()
+    xs, ys = [], []
+    for o in product:
+        if o.hide_render or o.type in ("EMPTY", "LIGHT", "CAMERA"):
+            continue
+        oe = o.evaluated_get(dg)
+        for c in oe.bound_box:
+            p = world_to_camera_view(sc, cam, oe.matrix_world @ Vector(c))
+            if p.z <= 1e-4:
+                return None
+            xs.append(p.x * W)
+            ys.append((1.0 - p.y) * H)
+    if not xs:
+        return None
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    pad = pad_frac * max(x1 - x0, y1 - y0) + pad_px
+    x0, y0 = max(0, int(math.floor(x0 - pad))), max(0, int(math.floor(y0 - pad)))
+    x1, y1 = min(W, int(math.ceil(x1 + pad))), min(H, int(math.ceil(y1 + pad)))
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return None
+    return x0, y0, x1, y1
+
+
+def render_product_hq(sc, path, out_w, out_h, box, ss, kind="exr"):
+    """Render only the product's screen box at `ss`x supersampling, downsample, paste into a full-size
+    transparent frame. Returns (full-size path, supersampled crop path)."""
+    x0, y0, x1, y1 = box
+    Ws, Hs = out_w * ss, out_h * ss
+    r = sc.render
+    sv = Saved()
+    sv.set(r, "resolution_x", Ws)
+    sv.set(r, "resolution_y", Hs)
+    sv.set(r, "resolution_percentage", 100)
+    sv.set(r, "use_border", True)
+    sv.set(r, "use_crop_to_border", True)
+    # border is bottom-left normalised; +0.25 px keeps Blender's float->int pixel edges exact
+    sv.set(r, "border_min_x", (x0 * ss + 0.25) / Ws)
+    sv.set(r, "border_max_x", min(1.0, (x1 * ss + 0.25) / Ws))
+    sv.set(r, "border_min_y", (Hs - y1 * ss + 0.25) / Hs)
+    sv.set(r, "border_max_y", min(1.0, (Hs - y0 * ss + 0.25) / Hs))
+    base, ext = os.path.splitext(path)
+    crop_path = do_render(sc, f"{base}_crop{ext}", kind)
+    sv.restore()
+    C, _ = G.read_image(crop_path)
+    if C.shape[2] == 3:
+        C = np.dstack([C, np.ones(C.shape[:2], np.float32)])
+    eh, ew = (y1 - y0) * ss, (x1 - x0) * ss
+    if C.shape[:2] != (eh, ew):  # should not happen; keep alignment anyway
+        log(f"crop size {C.shape[1]}x{C.shape[0]} != expected {ew}x{eh}; resampling")
+        C = G.resize_bilinear(C, eh, ew)
+    if kind != "exr":  # display-space PNG with straight alpha -> premultiply for filtering
+        C[..., :3] *= C[..., 3:4]
+    small = G.resize_area(C, y1 - y0, x1 - x0) if ss > 1 else C
+    full = np.zeros((out_h, out_w, 4), np.float32)
+    full[y0:y1, x0:x1] = small
+    if kind == "exr":
+        G.write_image(path, full, straight_alpha=False)
+    else:
+        a = full[..., 3:4]
+        full[..., :3] = np.where(a > 1e-6, full[..., :3] / np.maximum(a, 1e-6), 0.0)
+        G.write_image(path, full, bits=16)
+    return path, crop_path
+
+
+def product_quality_settings(sc, sv, pq):
+    """Raise quality for the product pass only (restored afterwards by sv)."""
+    c = sc.cycles
+    sv.set(c, "samples", int(pq["samples"]))
+    sv.set(c, "adaptive_threshold", float(pq["noise_threshold"]))
+    for attr, lo in (("glossy_bounces", 8), ("transmission_bounces", 12), ("transparent_max_bounces", 32)):
+        if hasattr(c, attr) and getattr(c, attr) < lo:
+            sv.set(c, attr, lo)
+    if hasattr(c, "texture_limit_render"):
+        sv.set(c, "texture_limit_render", "OFF")
+    sv.set(sc.render, "use_simplify", False)
 
 
 # ------------------------------------------------------------------ calibration (image mode)
@@ -269,7 +357,25 @@ def main():
         out_w, out_h = resolution_for(res_name, base_res)
     sc.render.resolution_x, sc.render.resolution_y = out_w, out_h
     sc.render.resolution_percentage = 100
-    sc.cycles.samples = a.samples or (int(rcfg.get("preview_samples", 64)) if a.preview else int(rcfg.get("samples", 300)))
+    # shadow / surface passes: lower quality is fine (they only darken the background)
+    if a.shadow_samples or a.samples:
+        sc.cycles.samples = a.shadow_samples or a.samples
+    elif a.preview:
+        sc.cycles.samples = int(rcfg.get("preview_samples", 64))
+    else:
+        sc.cycles.samples = int(rcfg.get("shadow_samples", 128))
+    # product-only pass: rendered as a supersampled crop around the product, high samples
+    pq_cfg = rcfg.get("product_quality", {}) or {}
+    pq = {
+        "samples": a.product_samples or (int(pq_cfg.get("preview_samples", 128)) if a.preview
+                                         else int(pq_cfg.get("samples", max(1024, int(rcfg.get("samples", 0)))))),
+        "noise_threshold": float(pq_cfg.get("preview_noise_threshold", 0.02) if a.preview
+                                 else pq_cfg.get("noise_threshold", 0.003)),
+        "supersample": a.supersample or (1 if a.preview else pq_cfg.get("supersample", "auto")),
+        "time_share": float(pq_cfg.get("time_share", 0.6)),
+        "max_megapixels": float(pq_cfg.get("max_megapixels", 24)),
+        "crop": bool(pq_cfg.get("crop", True)),
+    }
     sc.cycles.use_denoising = True
     try:
         sc.cycles.denoiser = "OPENIMAGEDENOISE"
@@ -278,19 +384,55 @@ def main():
     if hasattr(sc.cycles, "denoising_use_gpu"):
         sc.cycles.denoising_use_gpu = dev != "CPU"
     sc.cycles.use_adaptive_sampling = True
-    sc.cycles.adaptive_threshold = float(rcfg.get("preview_noise_threshold", 0.03) if a.preview else rcfg.get("noise_threshold", 0.01))
+    sc.cycles.adaptive_threshold = float(rcfg.get("preview_noise_threshold", 0.03) if a.preview
+                                         else rcfg.get("shadow_noise_threshold", rcfg.get("noise_threshold", 0.02)))
     budget = a.time_budget or float(rcfg.get("preview_time_budget_s", 30) if a.preview else rcfg.get("time_budget_s", 120))
-    n_passes = 3 if not scene_mode else (3 if job.get("image") else 4)
+    n_other = 2 if not scene_mode else (2 if job.get("image") else 3)  # passes besides the product pass
     probe_share = 0.1 if (not scene_mode and not a.no_calibrate and job.get("calibrate", {}) is not False) else 0.0
-    per_pass = max(5.0, budget * (1 - probe_share) / n_passes)
+    usable = budget * (1 - probe_share)
+    product_time = max(5.0, usable * pq["time_share"])
+    per_pass = max(5.0, usable * (1 - pq["time_share"]) / n_other)
     sc.cycles.time_limit = per_pass
-    log(f"resolution {out_w}x{out_h} ({res_name}), samples {sc.cycles.samples}, device {dev}, "
-        f"time budget {budget:.0f}s -> {per_pass:.0f}s per pass")
+    log(f"resolution {out_w}x{out_h} ({res_name}), device {dev}, budget {budget:.0f}s | product: {pq['samples']} spp, "
+        f"{pq['supersample']}x supersampled crop, {product_time:.0f}s | other passes: {sc.cycles.samples} spp, "
+        f"{per_pass:.0f}s each")
     sc.render.film_transparent = True
     t_start = time.time()
     sv = Saved()
     result = {"name": name, "preview": a.preview, "resolution": [out_w, out_h], "resolution_preset": res_name,
-              "samples": sc.cycles.samples, "device": dev, "time_budget_s": budget}
+              "shadow_samples": sc.cycles.samples, "device": dev, "time_budget_s": budget}
+
+    def product_pass(path, kind):
+        """High-quality product-only render: crop around the product (Ctrl+B style), supersampled."""
+        sv2 = Saved()
+        product_quality_settings(sc, sv2, pq)
+        sv2.set(sc.cycles, "time_limit", product_time)
+        box = product_box_px(sc, objs("product"), out_w, out_h) if pq["crop"] else None
+        info = {"samples": pq["samples"], "noise_threshold": pq["noise_threshold"], "time_limit_s": round(product_time, 1)}
+        t0 = time.time()
+        try:
+            if box is None:
+                info["crop"] = None
+                out = do_render(sc, path, kind)
+            else:
+                cw, ch = box[2] - box[0], box[3] - box[1]
+                ss = pq["supersample"]
+                if ss == "auto":  # small crops are cheap: supersample them more
+                    mp = cw * ch / 1e6
+                    ss = 4 if mp <= 1.0 else 3 if mp <= 3.0 else 2
+                ss = max(1, min(4, int(ss)))
+                while ss > 1 and cw * ch * ss * ss / 1e6 > pq["max_megapixels"]:
+                    ss -= 1
+                out, crop = render_product_hq(sc, path, out_w, out_h, box, ss, kind)
+                info.update({"crop_box_px": list(box), "crop_size_px": [cw, ch], "supersample": ss,
+                             "crop_render_px": [cw * ss, ch * ss], "crop_file": crop,
+                             "frame_fraction": round(cw * ch / (out_w * out_h), 4)})
+        finally:
+            sv2.restore()
+        info["seconds"] = round(time.time() - t0, 1)
+        result["product_pass"] = info
+        log("product pass", info)
+        return out
     if dev == "CPU":
         result["warning_cpu"] = "No GPU found - rendering on CPU; the time limit will cut samples, so expect more noise."
 
@@ -306,7 +448,7 @@ def main():
         # product pass: catcher invisible to camera (still bounces/reflects)
         for c in catchers:
             sv.set(c, "visible_camera", False)
-        p_exr = do_render(sc, os.path.join(pass_dir, f"{name}_product{suffix}.exr"))
+        p_exr = product_pass(os.path.join(pass_dir, f"{name}_product{suffix}.exr"), "exr")
         sv.restore()
         # differential pair: proxy surfaces rendered as ordinary surfaces, with and without the product
         seed = sc.cycles.seed
@@ -323,6 +465,10 @@ def main():
         import composite
         outs, qc = composite.run(plate_path, p_exr, None, out_dir, name + suffix, job.get("finish", {}),
                                  base_exr=c0, with_exr=c1)
+        crop = result.get("product_pass", {}).get("crop_file")
+        if crop and result["product_pass"].get("supersample", 1) > 1:
+            outs["product_hires"] = composite.hires_product(
+                crop, os.path.join(out_dir, f"{name}{suffix}_1_product_hires.png"), job.get("finish", {}))
         result.update({"outputs": outs, "qc": qc})
     else:
         product = objs("product")
@@ -342,7 +488,7 @@ def main():
         sv.restore()
         for o in meshes:
             sv.set(o, "visible_camera", False)
-        p_png = do_render(sc, os.path.join(out_dir, f"{name}_1_product{suffix}.png"), "png")
+        p_png = product_pass(os.path.join(out_dir, f"{name}_1_product{suffix}.png"), "png")
         sv.restore()
         for o in product:
             sv.set(o, "visible_camera", False)

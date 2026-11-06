@@ -173,9 +173,16 @@ can't gain detail. Render only after they answer:
 ```
 "BLENDER" -b --factory-startup --python-exit-code 1 -P scripts/render_outputs.py -- --blend out/<name>.blend --res 4k
 ```
-`--res`: `720p | 1080p | 1440p | 4k | 8k | native | <long side px>`. Final defaults: 300 samples, GPU (OptiX/CUDA/
-HIP/Metal, chosen automatically), adaptive sampling and OpenImageDenoise on, and a **120 s time budget for the whole
-render**. The budget is split over the passes with Cycles' per-pass time limit, so it finishes in 1–2 minutes even at 4K.
+`--res`: `720p | 1080p | 1440p | 4k | 8k | native | <long side px>`. GPU (OptiX/CUDA/HIP/Metal, chosen
+automatically), adaptive sampling and OpenImageDenoise on, and a **120 s time budget for the whole render**:
+- **Product pass, high quality.** Only the product's screen box is rendered (like Ctrl+B in the viewport), alone,
+  at 1024 samples and supersampled 2–4× (auto: smaller products get more), then downsampled into the frame. It gets
+  60% of the budget. This pass is `_1_product.png` and the product in `_3_` and `_4_`. Bonus: `_1_product_hires.png`
+  is the supersampled crop itself, for close-ups and retouching.
+- **Shadow passes, lower quality** (128 samples): they only darken the background, so noise there doesn't show.
+If the user still finds the product soft or noisy, raise `--product-samples 2048`, `--supersample 4` and/or
+`--time-budget 240`. `--shadow-samples` sets the other passes. The render report's `product_pass` shows the crop
+box, the supersampling and the time it took.
 If the report says `warning_cpu` (no GPU), tell the user: the time limit then costs quality, so offer a longer
 `--time-budget` or a smaller size.
 Then look at the final QC sheet once more and hand over the list of files, with absolute paths and the resolution. Mention anything the
@@ -190,6 +197,7 @@ render used another engine or post-processing, render the plate yourself (leave 
 ## Rules
 - Never overwrite inputs. Everything goes to the job folder.
 - Always 720p first, the user confirms placement, then ask for the final size (default 4K). Never skip the QC sheet.
+- Spend render time on the product, not the shadows: the product crop pass is where quality shows.
 - The product's real size is truth: the user's dimensions if given, otherwise the file. Fix scene-scale problems in the
   scene (`--ref`), never by rescaling the product to make the box fit.
 - Report numbers that matter (camera height, FOV, scale ratio, light scale) in plain words, not raw JSON.

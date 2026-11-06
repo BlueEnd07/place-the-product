@@ -51,8 +51,9 @@ def _apply_exif_orientation(px, o):
     return px
 
 
-def write_image(path, px, bits=8, quality=95):
-    """px float (H, W, C) already in the encoding wanted for the file (sRGB for png/jpg)."""
+def write_image(path, px, bits=8, quality=95, straight_alpha=True):
+    """px float (H, W, C) already in the encoding wanted for the file (sRGB for png/jpg).
+    straight_alpha=False for premultiplied data (e.g. EXR passes that composite.py reads back)."""
     import OpenImageIO as oiio
     px = np.ascontiguousarray(px, dtype=np.float32)
     H, W = px.shape[:2]
@@ -69,7 +70,8 @@ def write_image(path, px, bits=8, quality=95):
         spec.attribute("Compression", f"jpeg:{quality}")
     if C == 4:
         spec.alpha_channel = 3
-        spec.attribute("oiio:UnassociatedAlpha", 1)  # we hand over straight (un-premultiplied) alpha
+        if straight_alpha:
+            spec.attribute("oiio:UnassociatedAlpha", 1)  # we hand over straight (un-premultiplied) alpha
     out = oiio.ImageOutput.create(path)
     if out is None:
         raise IOError(f"cannot create {path}: {oiio.geterror()}")

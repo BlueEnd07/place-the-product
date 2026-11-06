@@ -16,10 +16,16 @@ Claude matches the camera, places the product at real size, and matches the ligh
 | `<name>_3_product_shadow.png` | Product + shadow, transparent |
 | `<name>_4_composite.png/.jpg` | The final image |
 | `<name>_shadow_multiply.png` | Bonus: the shadow as a Photoshop "Multiply" layer |
+| `<name>_1_product_hires.png` | Bonus: the product crop at 2–4× resolution (supersampled) |
 
 All images share one pixel size (the final resolution you pick, 4K by default, with the room image's aspect ratio), so they stack directly in Photoshop.
 
-**Render flow:** Claude first renders a quick **720p check** (a few seconds) and asks you to confirm the placement. After you approve, it asks for the final size (4K by default) and renders it on the GPU: 300 samples, denoised, held to about 1–2 minutes.
+**Render flow:** Claude first renders a quick **720p check** (a few seconds) and asks you to confirm the placement. After you approve, it asks for the final size (4K by default) and renders it on the GPU, denoised and held to about 1–2 minutes.
+
+**Product quality:** the product is rendered on its own, cropped to just its area (like Ctrl+B in Blender's
+viewport), at 1024 samples and 2–4× supersampling, so it stays crisp even when it is small in the frame. The shadow
+passes use fewer samples, since they only darken the background. You also get `<name>_1_product_hires.png`, the
+supersampled product crop, for close-ups.
 
 ## How it works
 1. **Camera match.** [MoGe-3](https://github.com/microsoft/MoGe) estimates the lens and a real-scale 3D surface of

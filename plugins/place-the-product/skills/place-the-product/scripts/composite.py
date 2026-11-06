@@ -40,6 +40,21 @@ def straight(rgb, a):
     return np.where(a[..., None] > 1e-6, rgb / np.maximum(a[..., None], 1e-6), 0.0)
 
 
+def hires_product(crop_exr, out_png, finish=None):
+    """Bonus: the supersampled product crop as a straight-alpha sRGB PNG (product gain/saturation applied,
+    no grain or blur) - for close-ups, retouching or placing at a larger size."""
+    finish = finish or {}
+    C, _ = G.read_image(crop_exr)
+    rgb, a = C[..., :3].astype(np.float32), C[..., 3].astype(np.float32)
+    rgb = rgb * np.array(finish.get("product_gain", [1, 1, 1]), dtype=np.float32)
+    sat = float(finish.get("product_saturation", 1.0))
+    if abs(sat - 1) > 1e-3:
+        L = G.luminance(rgb)[..., None]
+        rgb = L + (rgb - L) * sat
+    G.write_image(out_png, np.dstack([G.linear_to_srgb(straight(rgb, a)), a]), bits=16)
+    return out_png
+
+
 def run(plate_path, product_exr, shadow_exr, out_dir, name, finish=None, report=None, base_exr=None, with_exr=None):
     finish = finish or {}
     P, _ = G.read_image(product_exr)

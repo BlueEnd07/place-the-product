@@ -71,12 +71,22 @@ and one of `work_dir` (image mode) or `scene_blend` (scene mode) are required.
   },
 
   "render": {
-    "samples": 300,                     // final; adaptive sampling stops earlier where clean
-    "preview_samples": 64,              // the 720p check render
+    "product_quality": {                // product-only pass: a crop around the product (like Ctrl+B), rendered alone
+      "samples": 1024,                  //   high samples; adaptive sampling stops earlier where clean
+      "noise_threshold": 0.003,
+      "supersample": "auto",            //   crop rendered at Nx and downsampled: auto = 4 (small) / 3 / 2 (large); 1-4
+      "max_megapixels": 24,             //   cap on the supersampled crop (lowers N for products filling the frame)
+      "time_share": 0.6,                //   share of the time budget for this pass
+      "crop": true,                     //   false = full-frame product pass
+      "preview_samples": 128            //   720p check: 1x, 128 spp
+    },
+    "shadow_samples": 128,              // shadow / surface passes (with/without product): lower quality is fine
+    "shadow_noise_threshold": 0.02,
+    "samples": 300,                     // (legacy) still used as a floor for product samples
+    "preview_samples": 64,              // shadow passes in the 720p check render
     "final_resolution": "4k",           // default for the final when --res isn't given: 720p|1080p|1440p|4k|8k|native|<px>
     "time_budget_s": 120,               // whole final render (all passes); split per pass via Cycles' time limit
     "preview_time_budget_s": 30,
-    "noise_threshold": 0.01,            // adaptive sampling (preview: 0.03)
     "device": "auto",                   // auto = OptiX > CUDA > HIP > Metal > oneAPI > CPU
     "max_bounces": 8
   }
