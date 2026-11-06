@@ -1,0 +1,7 @@
+{
+  "name": "place-the-product",
+  "version": "1.0.0",
+  "description": "Place a real-scale product .blend into any interior photo or architectural render: camera match (MoGe or vanishing lines, or the architect's own scene), placement on wall/table/floor, light and shadow match, and four deliverables (product, shadow, product+shadow, composite) plus the .blend.",
+  "author": { "name": "KEUS Design" },
+  "keywords": ["blender", "product-placement", "compositing", "camera-match", "moge", "interior", "architectural-visualization", "shadow-catcher"]
+}

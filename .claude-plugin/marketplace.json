@@ -1,0 +1,12 @@
+{
+  "name": "place-the-product-marketplace",
+  "description": "Place real products into interior photos and architectural renders with matched camera, light and shadows.",
+  "owner": { "name": "KEUS Design" },
+  "plugins": [
+    {
+      "name": "place-the-product",
+      "source": "./plugins/place-the-product",
+      "description": "Skill: product .blend + room image (or arch .blend) -> matched .blend, product/shadow/product+shadow PNGs and the final composite."
+    }
+  ]
+}
